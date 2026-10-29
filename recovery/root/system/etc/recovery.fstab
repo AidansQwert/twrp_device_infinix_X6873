@@ -13,7 +13,24 @@
 # Format: <mount point> <fstype> <device> [<device2>] <flags>
 
 # ---------------------------------------------------------------- data
-/data           f2fs    /dev/block/by-name/userdata                    flags=fileencryption=aes-256-xts:aes-256-cts:v2;keydirectory=/metadata/vold/metadata_encryption;wrappedkey;length=2147483648
+# The flag string below is TWRP's own flag vocabulary (bootable/recovery/
+# partition.cpp tw_flags[]), parsed case-sensitively after "flags=".
+#
+# Two flags that were here are deliberately gone:
+#   length=2147483648  TWRP stores it in TWPartition::Length and, when it is
+#                      non-zero, computes the partition size as
+#                      Block_Count = Length / 1024 (partition.cpp:2056-2067).
+#                      That pinned /data at 2 GiB, so the reported size, free
+#                      space and backup accounting were all wrong. No length=
+#                      belongs on a real block partition.
+#   wrappedkey         That claims hardware-wrapped FBE keys. The stock fstab
+#                      in first_stage_ramdisk/fstab.mt6897 does not ask for
+#                      wrapped keys (no wrappedkey/wrappedkey_v0 anywhere), so
+#                      declaring it only misleads the crypto path.
+#
+# fileencryption now matches stock exactly, including the trailing
+# +inlinecrypt_optimized modifier.
+/data           f2fs    /dev/block/by-name/userdata                    flags=display="Data";fileencryption=aes-256-xts:aes-256-cts:v2+inlinecrypt_optimized;keydirectory=/metadata/vold/metadata_encryption;quota;wipeingui;backup=1
 /metadata       f2fs    /dev/block/by-name/metadata                    flags=display="Metadata";backup=0;wipeingui
 
 # --------------------------------------------------- logical (in super)
