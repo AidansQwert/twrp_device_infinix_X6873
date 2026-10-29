@@ -227,6 +227,12 @@ This tree has not yet been booted on hardware. Every value in it is verified
 against stock, and the graft tool is verified to be lossless, but "verified
 configuration" is not the same as "known to boot". First-boot risks that remain:
 
+- `/data` decryption is **not working**. TWRP carries a keymaster/KeyMint
+  *client*, but this ramdisk ships no HAL to talk to, and TWRP's version
+  discovery asks for the HIDL name `android.hardware.keymaster`
+  (`partitionmanager.cpp:221`) which an AIDL KeyMint device does not publish.
+  `docs/DECRYPTION.md` has the full diagnosis, what a working setup needs, and
+  the TEE root-of-trust caveat that may block it on this SoC anyway.
 - TWRP 12.1 may not mount stock EROFS `system`/`vendor` for backups
 - `TW_BRIGHTNESS_PATH` is unconfirmed on this panel
 - the fingerprint input device has no `.idc`, so TWRP may log unknown input events
