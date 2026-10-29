@@ -238,11 +238,31 @@ TW_INCLUDE_CRYPTO := true
 TW_INCLUDE_CRYPTO_FBE := true
 TW_INCLUDE_LIBRESETPROP := true
 TW_INCLUDE_RESETPROP := true
-# TW_INCLUDE_FBE_METADATA_DECRYPT is NOT set: bootable/recovery/Android.mk:358
-# adds -DTW_INCLUDE_FBE_METADATA_DECRYPT unconditionally inside the
-# TW_INCLUDE_CRYPTO block, so setting it here would be dead config.
-# TW_USE_FSCRYPT_POLICY is NOT set: no consumer in TWRP 12.1's Android.mk.
-# Both were verified by grepping the actual bootable/recovery source.
+# TW_INCLUDE_FBE_METADATA_DECRYPT is NOT set: TWRP's Android.mk adds
+# -DTW_INCLUDE_FBE_METADATA_DECRYPT unconditionally inside the
+# TW_INCLUDE_CRYPTO block (android-12.1 Android.mk:358), so setting it here
+# would be dead config.
+#
+# CORRECTION to an earlier comment in this file: TW_USE_FSCRYPT_POLICY does
+# have a consumer. libtar/Android.mk:59 is the only one, and the only value
+# that changes behaviour is 1 (-DUSE_FSCRYPT_POLICY_V1, legacy policy v1).
+# Every other value, including leaving it unset, compiles -DUSE_FSCRYPT_POLICY_V2.
+# This device's fstab declares ...aes-256-cts:v2, i.e. policy v2, so 2 is the
+# correct value. It is set explicitly below so the choice is visible instead of
+# being an implicit default.
+TW_USE_FSCRYPT_POLICY := 2
+
+# WHY /data STILL DOES NOT DECRYPT
+#
+# TW_INCLUDE_CRYPTO builds TWRP's crypto client code. It does not supply the
+# keymaster/KeyMint implementation that actually unwraps the metadata key, and
+# this ramdisk ships none: recovery/root contains only init.recovery, the fstab
+# and kernel modules. TWRP's version discovery is also HIDL-specific --
+# partitionmanager.cpp:221 calls
+#     TWFunc::Get_Service_From_Manifest("/vendor", "android.hardware.keymaster", ver)
+# and falls back only to the keymaster_ver property or a ramdisk manifest, so a
+# device that exposes AIDL android.hardware.security.keymint has nothing for it to
+# find. See docs/DECRYPTION.md for the diagnosis and what a working setup needs.
 
 # ------------------------------------------------------------------- misc
 TW_INCLUDE_FASTBOOTD := true
