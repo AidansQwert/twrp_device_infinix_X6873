@@ -194,6 +194,7 @@ jobs:
         run: |
           cd /mnt/twrp
           set +e
+          set -o pipefail
           export ALLOW_MISSING_DEPENDENCIES=true
           export LC_ALL=C
           source build/envsetup.sh
@@ -216,9 +217,18 @@ jobs:
             exit 1
           fi
 
+          # The vendor_boot packaging rule invokes mkbootfs on this directory
+          # even though this tree grafts the recovery fragment into the stock
+          # image and deliberately does not build a replacement PLATFORM
+          # fragment. Create the empty staging directory so that optional
+          # intermediate does not emit "cannot open directory". The final
+          # flashable image still takes PLATFORM from the stock image.
+          mkdir -p out/target/product/X6873/vendor_ramdisk
+
           mka ${{ inputs.build_target }} -j$(nproc --all) 2>&1 | tee $HOME/build.log
-          echo "rc=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
-          exit 0
+          rc=${PIPESTATUS[0]}
+          echo "rc=$rc" >> $GITHUB_OUTPUT
+          exit "$rc"
 
       - name: Summarise errors
         if: always()
@@ -323,7 +333,7 @@ jobs:
 
       # ------------------------------------------------------------ telegram
       # Sends the build report to Telegram. Uses repository variables TG_BOT
-      # (bot token) and TG_CHAT (chat id) — both optional; the step is skipped
+      # (bot token) and TG_CHAT (chat id) -- both optional; the step is skipped
       # entirely when they are not configured. The token is never printed and
       # never appears in a URL that gets logged.
       - name: Report to Telegram
