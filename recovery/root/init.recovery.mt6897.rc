@@ -9,10 +9,28 @@
 # The stock file also imports /init.recovery.project.rc, which does not exist
 # in a TWRP ramdisk; importing a missing file makes init log an error and can
 # abort the stage, so that import is omitted.
+#
+# Trustonic bootstrapping is kept minimal: create the persisted registry
+# directories and let the stock Trustonic services start when the device marks
+# the TEE as ready. The exact trustlet list is the same one the stock daemon
+# is started with on this device.
 
 on init
     setprop sys.usb.configfs 1
     setprop sys.usb.controller "11201000.usb0"
+
+    mkdir /mnt/vendor/persist 0771 system system
+    mkdir /mnt/vendor/persist/mcRegistry 0771 system system
+    mkdir /mnt/vendor/persist/keybox 0771 system system
+
+on fs
+    chown system system /mnt/vendor/persist
+    chmod 0771 /mnt/vendor/persist
+    restorecon /mnt/vendor/persist
+
+on post-fs-data
+    mkdir /data/vendor/key_provisioning 0771 system system
+    mkdir /data/vendor/mcRegistry 0775 system system
 
 on boot
     # Creates /dev/block/by-name symlinks for the logical partitions.
