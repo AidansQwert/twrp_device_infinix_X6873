@@ -3,6 +3,8 @@
 TWRP recovery for the **Infinix GT 30 Pro (X6873)**, MediaTek **MT6897**
 (Dimensity 8350 Ultimate). Built by GitHub Actions.
 
+> This repository is a fork of [kaminarich/twrp_device_infinix_X6873](https://github.com/kaminarich/twrp_device_infinix_X6873). Credit and thanks to Kaminarich for the upstream device tree. This fork contains additional changes; see the commit history for details.
+
 **The flashable output is `vendor_boot.img`, not `recovery.img`.** This device
 has no recovery partition — recovery lives inside `vendor_boot` as a ramdisk
 fragment, exactly as stock does.
@@ -242,6 +244,7 @@ RECOVERY fragment.
 
 ## Credits
 
+- **Upstream device tree:** [Kaminarich](https://github.com/kaminarich/twrp_device_infinix_X6873). This repository is a fork; thanks for the original work.
 - `bootctrl/` and `mtk_plpath_utils/` come from
   [idabgsram/recovery-device_infinix_Infinix-X6873](https://github.com/idabgsram/recovery-device_infinix_Infinix-X6873)
   (Apache-2.0, `NOTICE` preserved).
