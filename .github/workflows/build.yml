@@ -111,7 +111,15 @@ jobs:
           git -C "$BUNDLE" checkout --detach -q FETCH_HEAD
 
           # Copy the vendor tree from the pinned bundle.
-          rsync -a --delete --ignore-existing "$BUNDLE/vendor/" "$DEST/"
+          # .tabin files are NOT referenced by trustonic.rc (only .drbin is
+          # loaded via "-r"), and some of them are 5-12 MB each. Including
+          # them in the recovery ramdisk fragment is what pushed the built
+          # vendor_boot.img past the 64 MiB partition size
+          # (71905280 > 67108864). They are codec/DRM trustlets unrelated to
+          # KeyMint/gatekeeper, so they are excluded here.
+          rsync -a --delete --ignore-existing \
+            --exclude='app/mcRegistry/*.tabin' \
+            "$BUNDLE/vendor/" "$DEST/"
 
           # Fail hard if any trustlet/registry file required by trustonic.rc is missing.
           test -f "$DEST/etc/init/trustonic.rc" || {
