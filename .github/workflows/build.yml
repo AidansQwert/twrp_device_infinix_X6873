@@ -123,20 +123,32 @@ jobs:
             "$DEST/etc/init/trustonic.rc" \
             | sed 's#.*/##' | sort -u > /tmp/required-trustlets
 
+          # The stock trustonic.rc passes many "-r <driver>.drbin" arguments to
+          # mcDriverDaemon, but the stock mcRegistry does not ship all of them
+          # (e.g. 020b/cmdq, 030b/spi, 0f5eed.../isp). Missing drivers are
+          # skipped by the daemon, so they are warnings here, not errors.
+          # 020f (utils) is the one driver that must be present.
+          test -f "$DEST/app/mcRegistry/020f0000000000000000000000000000.drbin" || {
+            echo "::error::020f0000000000000000000000000000.drbin (utils) is missing"
+            exit 1
+          }
+
+          missing=0
           while IFS= read -r blob; do
             if [ ! -f "$DEST/app/mcRegistry/$blob" ]; then
-              # 020b is referenced by trustonic.rc but is not present in stock
-              # firmware (device mcRegistry and official dump both lack it).
               case "$blob" in
-                020b0000000000000000000000000000.drbin)
-                  echo "::warning::$blob is referenced by trustonic.rc but not in stock; skipping"
-                  continue
+                *.drbin)
+                  echo "::warning::$blob listed in trustonic.rc but not in stock mcRegistry; skipping"
+                  missing=$((missing + 1))
+                  ;;
+                *)
+                  echo "::error::Trustonic init requires missing registry file: $blob"
+                  exit 1
                   ;;
               esac
-              echo "::error::Trustonic init requires missing registry file: $blob"
-              exit 1
             fi
           done < /tmp/required-trustlets
+          echo "Skipped $missing driver(s) not present in stock mcRegistry"
 
           chmod 0755 \
             "$DEST/bin/mcDriverDaemon" \
