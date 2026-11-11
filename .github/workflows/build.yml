@@ -110,22 +110,25 @@ jobs:
           git -C "$BUNDLE" fetch --depth=1 origin "$BUNDLE_REF"
           git -C "$BUNDLE" checkout --detach -q FETCH_HEAD
 
-          for f in \
-            vendor/bin/mcDriverDaemon \
-            vendor/bin/hw/android.hardware.gatekeeper-service.trustonic \
-            vendor/bin/hw/android.hardware.security.keymint@3.0-service.trustonic \
-            vendor/bin/hw/vendor.trustonic.tee@1.1-service \
-            vendor/etc/init/tee.rc \
-            vendor/etc/init/vendor.trustonic.tee@1.1-service.rc \
-            vendor/etc/vintf/manifest/android.hardware.gatekeeper-service.trustonic.xml \
-            vendor/etc/vintf/manifest/android.hardware.security.keymint-service.trustonic.xml; do
-            test -f "$BUNDLE/$f" || {
-              echo "::error::Required bundle file is missing: $f"
-              exit 1
-            }
-          done
+          # Copy the vendor tree from the pinned bundle.
+          rsync -a --delete --ignore-existing "$BUNDLE/vendor/" "$DEST/"
 
-          rsync -a --ignore-existing "$BUNDLE/vendor/" "$DEST/"
+          # Fail hard if any trustlet/registry file required by trustonic.rc is missing.
+          test -f "$DEST/etc/init/trustonic.rc" || {
+            echo "::error::trustonic.rc is missing from staged payload"
+            exit 1
+          }
+
+          grep -hoE '/vendor/app/mcRegistry/[[:alnum:]]+\.(drbin|tlbin|tabin)' \
+            "$DEST/etc/init/trustonic.rc" \
+            | sed 's#.*/##' | sort -u > /tmp/required-trustlets
+
+          while IFS= read -r blob; do
+            if [ ! -f "$DEST/app/mcRegistry/$blob" ]; then
+              echo "::error::Trustonic init requires missing registry file: $blob"
+              exit 1
+            fi
+          done < /tmp/required-trustlets
 
           chmod 0755 \
             "$DEST/bin/mcDriverDaemon" \
@@ -136,18 +139,6 @@ jobs:
           echo "Pinned Yayaya payload: $BUNDLE_REF"
           echo "Staged vendor payload:"
           du -sh "$DEST"
-
-          # Report missing trustlet references for review. Some entries may be
-          # optional, so warn instead of silently removing them or failing here.
-          grep -hoE '/vendor/app/mcRegistry/[[:alnum:]]+\.(drbin|tlbin|tabin)' \
-            "$DEST/etc/init/trustonic.rc" \
-            | sed 's#.*/##' | sort -u > /tmp/required-trustlets
-
-          while IFS= read -r blob; do
-            if [ ! -f "$DEST/app/mcRegistry/$blob" ]; then
-              echo "::warning::Trustonic init references absent registry file: $blob"
-            fi
-          done < /tmp/required-trustlets
 
       # This kernel repository provides the stock vendor_boot modules.
       - name: Sync prebuilt kernel and modules
