@@ -125,6 +125,14 @@ jobs:
 
           while IFS= read -r blob; do
             if [ ! -f "$DEST/app/mcRegistry/$blob" ]; then
+              # 020b is referenced by trustonic.rc but is not present in stock
+              # firmware (device mcRegistry and official dump both lack it).
+              case "$blob" in
+                020b0000000000000000000000000000.drbin)
+                  echo "::warning::$blob is referenced by trustonic.rc but not in stock; skipping"
+                  continue
+                  ;;
+              esac
               echo "::error::Trustonic init requires missing registry file: $blob"
               exit 1
             fi
