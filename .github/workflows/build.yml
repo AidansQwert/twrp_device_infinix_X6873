@@ -1,21 +1,7 @@
 name: Build TWRP vendor_boot (X6873)
 
-# Produces a FLASHABLE vendor_boot.img for the Infinix GT 30 Pro (X6873).
-#
-# Why this workflow does more than "mka vendorbootimage":
-#
-# Stock vendor_boot.img on this device holds TWO ramdisk fragments --
-# PLATFORM (~29 MB, the normal-boot vendor ramdisk with all 241 kernel
-# modules) and RECOVERY (~3 MB). A recovery build emits a vendor_boot.img
-# containing only its own ramdisk. Flashing that wipes the PLATFORM fragment,
-# the device loses the modules it needs to mount super, and it bootloops with
-# no way to recover -- recovery lived in the partition that was just
-# overwritten. That is the failure reported on the 145 and 150 builds.
-#
-# So we build the recovery ramdisk, then graft it into the STOCK image as the
-# RECOVERY fragment, leaving PLATFORM, the DTB and every header field
-# byte-identical.
-
+# Build recovery, then graft only the RECOVERY ramdisk fragment into stock
+# vendor_boot so the stock PLATFORM fragment, DTB, and header remain intact.
 on:
   workflow_dispatch:
     inputs:
@@ -40,10 +26,6 @@ jobs:
     timeout-minutes: 350
 
     steps:
-      # ------------------------------------------------------------ disk
-      # A TWRP minimal manifest sync plus out/ needs far more than the ~14 GB
-      # free on /. Reclaim the preinstalled toolchains and use /mnt, which has
-      # the bulk of the runner's disk.
       - name: Reclaim disk space
         run: |
           echo "--- before ---"; df -h / /mnt
@@ -56,7 +38,8 @@ jobs:
           sudo apt-get -qq purge -y '^dotnet-.*' '^llvm-.*' '^mysql-.*' \
                       '^mongodb-.*' azure-cli google-chrome-stable \
                       firefox powershell || true
-          sudo apt-get -qq autoremove -y; sudo apt-get -qq clean
+          sudo apt-get -qq autoremove -y
+          sudo apt-get -qq clean
           echo "--- after ---"; df -h / /mnt
 
       - name: Add swap
@@ -86,9 +69,8 @@ jobs:
           mkdir -p ~/bin
           curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
           chmod a+x ~/bin/repo
-          echo "$HOME/bin" >> $GITHUB_PATH
+          echo "$HOME/bin" >> "$GITHUB_PATH"
 
-      # ------------------------------------------------------------ source
       - name: Sync TWRP minimal manifest
         run: |
           sudo mkdir -p /mnt/twrp
@@ -99,70 +81,104 @@ jobs:
           git config --global color.ui false
           repo init --depth=1 --no-repo-verify \
             -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
-            -b ${{ inputs.manifest_branch }}
-          repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune
+            -b "${{ inputs.manifest_branch }}"
+          repo sync -c -j"$(nproc --all)" --force-sync --no-clone-bundle \
+            --no-tags --optimized-fetch --prune
           df -h /mnt
 
       - name: Place device tree
         run: |
           mkdir -p /mnt/twrp/device/infinix/X6873
           rsync -a --delete --exclude='.git' --exclude='.github' \
-            "$GITHUB_WORKSPACE/device_tree/" /mnt/twrp/device/infinix/X6873/
+            "$GITHUB_WORKSPACE/device_tree/" \
+            /mnt/twrp/device/infinix/X6873/
           ls -la /mnt/twrp/device/infinix/X6873
 
-      # The prebuilt kernel repo supplies the stock vendor_boot modules that
-      # populate the PLATFORM fragment. It must sit at $(DEVICE_PATH)-kernel,
-      # never at kernel/infinix/X6873, which is LineageOS/TWRP's auto-kdir.
+      # Pin the vendor payload to an immutable commit. Existing recovery init
+      # files are kept; the bundle supplies missing configs plus blobs/libs.
+      - name: Stage Trustonic KeyMint vendor payload
+        run: |
+          set -euo pipefail
+
+          BUNDLE=/tmp/x6873-keymint-bundle
+          DEST=/mnt/twrp/device/infinix/X6873/recovery/root/vendor
+          BUNDLE_REF=cbb3b582a7b733cf04f20faaabb27503eb87730a
+
+          mkdir -p "$BUNDLE" "$DEST"
+          git -C "$BUNDLE" init -q
+          git -C "$BUNDLE" remote add origin https://github.com/AidansQwert/Yayaya.git
+          git -C "$BUNDLE" fetch --depth=1 origin "$BUNDLE_REF"
+          git -C "$BUNDLE" checkout --detach -q FETCH_HEAD
+
+          for f in \
+            vendor/bin/mcDriverDaemon \
+            vendor/bin/hw/android.hardware.gatekeeper-service.trustonic \
+            vendor/bin/hw/android.hardware.security.keymint@3.0-service.trustonic \
+            vendor/bin/hw/vendor.trustonic.tee@1.1-service \
+            vendor/etc/init/tee.rc \
+            vendor/etc/init/vendor.trustonic.tee@1.1-service.rc \
+            vendor/etc/vintf/manifest/android.hardware.gatekeeper-service.trustonic.xml \
+            vendor/etc/vintf/manifest/android.hardware.security.keymint-service.trustonic.xml; do
+            test -f "$BUNDLE/$f" || {
+              echo "::error::Required bundle file is missing: $f"
+              exit 1
+            }
+          done
+
+          rsync -a --ignore-existing "$BUNDLE/vendor/" "$DEST/"
+
+          chmod 0755 \
+            "$DEST/bin/mcDriverDaemon" \
+            "$DEST/bin/hw/android.hardware.gatekeeper-service.trustonic" \
+            "$DEST/bin/hw/android.hardware.security.keymint@3.0-service.trustonic" \
+            "$DEST/bin/hw/vendor.trustonic.tee@1.1-service"
+
+          echo "Pinned Yayaya payload: $BUNDLE_REF"
+          echo "Staged vendor payload:"
+          du -sh "$DEST"
+
+          # Report missing trustlet references for review. Some entries may be
+          # optional, so warn instead of silently removing them or failing here.
+          grep -hoE '/vendor/app/mcRegistry/[[:alnum:]]+\.(drbin|tlbin|tabin)' \
+            "$DEST/etc/init/trustonic.rc" \
+            | sed 's#.*/##' | sort -u > /tmp/required-trustlets
+
+          while IFS= read -r blob; do
+            if [ ! -f "$DEST/app/mcRegistry/$blob" ]; then
+              echo "::warning::Trustonic init references absent registry file: $blob"
+            fi
+          done < /tmp/required-trustlets
+
+      # This kernel repository provides the stock vendor_boot modules.
       - name: Sync prebuilt kernel and modules
         run: |
           git clone --depth=1 -b lineage-24.0 \
             https://github.com/kaminarich/android_kernel_infinix_X6873.git \
             /mnt/twrp/device/infinix/X6873-kernel
           echo "modules: $(ls /mnt/twrp/device/infinix/X6873-kernel/modules/*.ko | wc -l)"
-          wc -l /mnt/twrp/device/infinix/X6873-kernel/modules/vendor_ramdisk.modules.load \
-                /mnt/twrp/device/infinix/X6873-kernel/modules/vendor_ramdisk.modules.load.recovery
+          wc -l \
+            /mnt/twrp/device/infinix/X6873-kernel/modules/vendor_ramdisk.modules.load \
+            /mnt/twrp/device/infinix/X6873-kernel/modules/vendor_ramdisk.modules.load.recovery
 
-      # ------------------------------------------------------- diagnostics
-      # Run #1 failed with "Could not find ui.xml for TW_THEME: not set" even
-      # though BoardConfig.mk sets TW_THEME. TWRP forwards TW_* into the soong
-      # namespace twrpVarsPlugin via vendor/twrp/config/BoardConfigSoong.mk,
-      # so prove whether kati sees the variable at all.
-      # Stage ONLY the modules the stock PLATFORM fragment does not carry.
-      #
-      # Run #11 failed the graft size check by 4.6 MB:
-      #   ERROR: result is 71733248 bytes, larger than the 67108864 byte
-      #   vendor_boot partition
-      # because it staged all 245 modules into the RECOVERY fragment while the
-      # graft PRESERVES the stock PLATFORM fragment -- which already contains
-      # the 241 vendor_boot modules. Everything except the four odm_dlkm
-      # additions was therefore duplicated, and 28 MB + 28 MB + TWRP does not
-      # fit in 64 MiB.
-      #
-      # The idabgsram tree ships all 245 because it REPLACES the whole
-      # vendor_boot, so nothing is duplicated. Our graft keeps stock PLATFORM,
-      # so it needs only the delta.
       - name: Stage recovery-fragment modules (delta only)
         run: |
           KSRC=/mnt/twrp/device/infinix/X6873-kernel/modules
           DEST=/mnt/twrp/device/infinix/X6873/recovery/root/lib/modules
           mkdir -p "$DEST"
-          # The four modules stock keeps in odm_dlkm, which the vendor_boot
-          # PLATFORM fragment does not carry: touch controller, Transsion
-          # touch abstraction, and two haptics drivers.
+
           for m in focaltech_ft3683g adaptive-ts haptic_drv_hv aw86224_light; do
             cp -v "$KSRC/$m.ko" "$DEST/"
           done
-          # Load list: stock recovery order + the four, appended in the order
-          # idabgsram's working tree uses. The stock list itself comes from the
-          # platform fragment, which already contains it -- copying it here as
-          # well would be harmless (later fragment wins) but is unnecessary.
-          cat "$KSRC"/vendor_ramdisk.modules.load.recovery \
-            | grep -vE '^(focaltech_ft3683g|adaptive-ts|haptic_drv_hv|aw86224_light)\.ko$' > /tmp/loadbase
-          printf 'adaptive-ts.ko\nfocaltech_ft3683g.ko\nhaptic_drv_hv.ko\naw86224_light.ko\n' >> /tmp/loadbase
-          cp /tmp/loadbase "$DEST"/modules.load.recovery
-          echo "modules staged : $(ls "$DEST"/*.ko | wc -l) (delta only)"
-          echo "load.recovery  : $(wc -l < "$DEST"/modules.load.recovery) entries"
-          tail -5 "$DEST"/modules.load.recovery
+
+          cat "$KSRC/vendor_ramdisk.modules.load.recovery" \
+            | grep -vE '^(focaltech_ft3683g|adaptive-ts|haptic_drv_hv|aw86224_light)\.ko$' \
+            > /tmp/loadbase
+          printf 'adaptive-ts.ko\nfocaltech_ft3683g.ko\nhaptic_drv_hv.ko\naw86224_light.ko\n' \
+            >> /tmp/loadbase
+          cp /tmp/loadbase "$DEST/modules.load.recovery"
+
+          echo "Modules staged: $(ls "$DEST"/*.ko | wc -l)"
+          echo "Recovery module entries: $(wc -l < "$DEST/modules.load.recovery")"
 
       - name: Diagnose device config
         run: |
@@ -173,22 +189,27 @@ jobs:
           {
             echo "### device tree present?"
             ls -la device/infinix/X6873/BoardConfig.mk
-            grep -n "TW_THEME\|TARGET_SCREEN_WIDTH\|TARGET_SCREEN_HEIGHT" device/infinix/X6873/BoardConfig.mk
+            grep -n "TW_THEME\|TARGET_SCREEN_WIDTH\|TARGET_SCREEN_HEIGHT" \
+              device/infinix/X6873/BoardConfig.mk
             echo
-            echo "### what kati resolves"
-            for v in TARGET_PRODUCT INTERNAL_PRODUCT TARGET_DEVICE TARGET_DEVICE_DIR TW_THEME TARGET_SCREEN_WIDTH TARGET_SCREEN_HEIGHT TARGET_RECOVERY_PIXEL_FORMAT PLATFORM_VERSION; do
-              printf '%-32s = %s\n' "$v" "$(get_build_var $v 2>/dev/null)"
+            echo "### resolved build variables"
+            for v in TARGET_PRODUCT INTERNAL_PRODUCT TARGET_DEVICE \
+                     TARGET_DEVICE_DIR TW_THEME TARGET_SCREEN_WIDTH \
+                     TARGET_SCREEN_HEIGHT TARGET_RECOVERY_PIXEL_FORMAT \
+                     PLATFORM_VERSION; do
+              printf '%-32s = %s\n' "$v" "$(get_build_var "$v" 2>/dev/null)"
             done
             echo
-            echo "### vendor/twrp present?"
-            ls -la vendor/twrp/config/BoardConfigSoong.mk vendor/twrp/config/BoardConfigTWRP.mk 2>&1
+            echo "### TWRP config files"
+            ls -la vendor/twrp/config/BoardConfigSoong.mk \
+                   vendor/twrp/config/BoardConfigTWRP.mk 2>&1
             echo
-            echo "### soong.variables twrp namespace"
-            grep -iA6 '"twrpVarsPlugin"' out/soong/soong.variables 2>/dev/null | head -30 || echo "(no soong.variables yet)"
-          } 2>&1 | tee $HOME/config-debug.log
-          cat $HOME/config-debug.log >> $GITHUB_STEP_SUMMARY
+            echo "### TWRP Soong namespace"
+            grep -iA6 '"twrpVarsPlugin"' out/soong/soong.variables \
+              2>/dev/null | head -30 || echo "(no soong.variables yet)"
+          } 2>&1 | tee "$HOME/config-debug.log"
+          cat "$HOME/config-debug.log" >> "$GITHUB_STEP_SUMMARY"
 
-      # ------------------------------------------------------------- build
       - name: Build
         id: build
         run: |
@@ -199,17 +220,9 @@ jobs:
           export LC_ALL=C
           source build/envsetup.sh
 
-          # lunch MUST NOT run in a pipeline. It is a shell function that
-          # exports TARGET_PRODUCT; a pipeline runs it in a subshell, so the
-          # banner prints but the exports are discarded and the following build
-          # silently falls back to aosp_arm-eng. That was the real cause of
-          # runs #1-#4: the theme failure and the generic_system artifact path
-          # requirement were both symptoms of building the wrong product.
-          # Use redirection, never a pipe.
-          lunch twrp_X6873-eng > $HOME/lunch.log 2>&1
-          cat $HOME/lunch.log
+          lunch twrp_X6873-eng > "$HOME/lunch.log" 2>&1
+          cat "$HOME/lunch.log"
 
-          # Refuse to build the wrong product.
           echo "TARGET_PRODUCT=${TARGET_PRODUCT:-<unset>}"
           echo "TARGET_DEVICE=${TARGET_DEVICE:-<unset>}"
           if [ "$TARGET_PRODUCT" != "twrp_X6873" ]; then
@@ -217,97 +230,102 @@ jobs:
             exit 1
           fi
 
-          # The vendor_boot packaging rule invokes mkbootfs on this directory
-          # even though this tree grafts the recovery fragment into the stock
-          # image and deliberately does not build a replacement PLATFORM
-          # fragment. Create the empty staging directory so that optional
-          # intermediate does not emit "cannot open directory". The final
-          # flashable image still takes PLATFORM from the stock image.
+          # The final image uses the stock PLATFORM fragment; this directory
+          # only satisfies the vendor_boot build's intermediate packaging step.
           mkdir -p out/target/product/X6873/vendor_ramdisk
 
-          mka ${{ inputs.build_target }} -j$(nproc --all) 2>&1 | tee $HOME/build.log
+          mka "${{ inputs.build_target }}" -j"$(nproc --all)" \
+            2>&1 | tee "$HOME/build.log"
           rc=${PIPESTATUS[0]}
-          echo "rc=$rc" >> $GITHUB_OUTPUT
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
           exit "$rc"
 
       - name: Summarise errors
         if: always()
         run: |
-          echo "## Build log tail" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          tail -n 60 $HOME/build.log >> $GITHUB_STEP_SUMMARY 2>/dev/null || true
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "## Distinct errors" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          grep -iE "^(FAILED|error:|ninja: error|make: \*\*\*)| error: " $HOME/build.log 2>/dev/null \
-            | sed 's/^[[:space:]]*//' | sort -u | head -n 40 >> $GITHUB_STEP_SUMMARY || true
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          ls -la /mnt/twrp/out/target/product/X6873/*.img 2>/dev/null || echo "no images produced"
+          echo "## Build log tail" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -n 60 "$HOME/build.log" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-      # ------------------------------------------------------------- graft
+          echo "## Distinct errors" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -iE '^(FAILED|error:|ninja: error|make: \*\*\*)| error: ' \
+            "$HOME/build.log" 2>/dev/null \
+            | sed 's/^[[:space:]]*//' | sort -u | head -n 40 \
+            >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+          ls -la /mnt/twrp/out/target/product/X6873/*.img 2>/dev/null \
+            || echo "no images produced"
+
       - name: Graft recovery fragment into stock vendor_boot
         if: always()
         run: |
           OUT=/mnt/twrp/out/target/product/X6873
-          # Prefer the standalone recovery ramdisk if the build emitted one;
-          # otherwise take the RECOVERY fragment out of the built vendor_boot.
           RAMDISK=""
+
           for c in "$OUT/ramdisk-recovery.img" "$OUT/ramdisk-recovery.cpio.lz4"; do
-            [ -f "$c" ] && RAMDISK="$c" && break
+            if [ -f "$c" ]; then
+              RAMDISK="$c"
+              break
+            fi
           done
+
           if [ -z "$RAMDISK" ] && [ -f "$OUT/vendor_boot.img" ]; then
             python3 "$GITHUB_WORKSPACE/device_tree/tools/vendor_boot_surgeon.py" \
-              unpack "$OUT/vendor_boot.img" $HOME/built_frags
-            RAMDISK=$(ls $HOME/built_frags/vendor_ramdisk_*recovery 2>/dev/null | head -1)
-            [ -z "$RAMDISK" ] && RAMDISK=$(ls $HOME/built_frags/vendor_ramdisk_* | head -1)
+              unpack "$OUT/vendor_boot.img" "$HOME/built_frags"
+            RAMDISK=$(ls "$HOME"/built_frags/vendor_ramdisk_*recovery \
+              2>/dev/null | head -1)
+            [ -z "$RAMDISK" ] && RAMDISK=$(ls "$HOME"/built_frags/vendor_ramdisk_* \
+              2>/dev/null | head -1)
           fi
+
           if [ -z "$RAMDISK" ]; then
-            echo "No recovery ramdisk was produced; nothing to graft." | tee -a $GITHUB_STEP_SUMMARY
+            echo "No recovery ramdisk was produced; nothing to graft." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          echo "using recovery ramdisk: $RAMDISK ($(stat -c%s "$RAMDISK") bytes)"
 
-          curl -fsSL --retry 3 -o $HOME/stock_vendor_boot.img "${{ inputs.stock_vendor_boot_url }}"
-          echo "stock image: $(stat -c%s $HOME/stock_vendor_boot.img) bytes"
-          sha256sum $HOME/stock_vendor_boot.img
+          echo "Using recovery ramdisk: $RAMDISK ($(stat -c%s "$RAMDISK") bytes)"
+          curl -fsSL --retry 3 -o "$HOME/stock_vendor_boot.img" \
+            "${{ inputs.stock_vendor_boot_url }}"
+          echo "Stock image: $(stat -c%s "$HOME/stock_vendor_boot.img") bytes"
+          sha256sum "$HOME/stock_vendor_boot.img"
 
-          # Refuse to proceed unless the stock image really has the expected
-          # PLATFORM + RECOVERY layout.
           python3 "$GITHUB_WORKSPACE/device_tree/tools/vendor_boot_surgeon.py" \
-            selftest $HOME/stock_vendor_boot.img | tee $HOME/selftest.log
+            selftest "$HOME/stock_vendor_boot.img" | tee "$HOME/selftest.log"
 
-          mkdir -p $HOME/artifact
+          mkdir -p "$HOME/artifact"
           python3 "$GITHUB_WORKSPACE/device_tree/tools/vendor_boot_surgeon.py" \
-            graft $HOME/stock_vendor_boot.img "$RAMDISK" \
-            $HOME/artifact/vendor_boot-twrp-X6873.img | tee $HOME/graft.log
+            graft "$HOME/stock_vendor_boot.img" "$RAMDISK" \
+            "$HOME/artifact/vendor_boot-twrp-X6873.img" | tee "$HOME/graft.log"
 
-          cp /mnt/twrp/out/target/product/X6873/vendor_boot.img \
-             $HOME/artifact/vendor_boot-RAW-DO-NOT-FLASH.img 2>/dev/null || true
-          cd $HOME/artifact
+          cp "$OUT/vendor_boot.img" \
+            "$HOME/artifact/vendor_boot-RAW-DO-NOT-FLASH.img" 2>/dev/null || true
+          cd "$HOME/artifact"
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
           {
             echo "## Grafted image"
             echo '```'
-            cat $HOME/graft.log
+            cat "$HOME/graft.log"
             echo '```'
-          } >> $GITHUB_STEP_SUMMARY
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      # actions/upload-artifact expands neither "~" nor "$HOME" in path
-      # patterns: they are matched literally. Runs #2-#5 uploaded nothing for
-      # exactly that reason. Stage into the workspace and use relative paths.
       - name: Stage artifacts
         if: always()
         run: |
           mkdir -p upload/logs
-          cp -v $HOME/artifact/* upload/ 2>/dev/null || true
-          for f in build.log lunch.log graft.log selftest.log config-debug.log \
-                   built_vendor_boot_info.log; do
+          cp -v "$HOME"/artifact/* upload/ 2>/dev/null || true
+
+          for f in build.log lunch.log graft.log selftest.log \
+                   config-debug.log built_vendor_boot_info.log; do
             cp -v "$HOME/$f" upload/logs/ 2>/dev/null || true
           done
+
           [ -f upload/logs/build.log ] && gzip -f upload/logs/build.log || true
-          echo "--- staged ---"
           find upload -type f -printf '%p  %s bytes\n' || echo "(nothing staged)"
         working-directory: ${{ github.workspace }}
 
@@ -320,22 +338,12 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      # --------------------------------------------------------- pixeldrain
-      # Uploads ONLY the grafted recovery image, from the runner, so nothing
-      # large crosses the maintainer's slow connection. Gives a direct,
-      # resumable download link -- better than the artifact zip, which must be
-      # fetched whole.
       - name: Upload image to pixeldrain
         if: always()
         env:
           PIXELDRAIN_KEY: ${{ secrets.PIXELDRAIN_KEY }}
         run: bash "$GITHUB_WORKSPACE/device_tree/tools/pixeldrain_upload.sh"
 
-      # ------------------------------------------------------------ telegram
-      # Sends the build report to Telegram. Uses repository variables TG_BOT
-      # (bot token) and TG_CHAT (chat id) -- both optional; the step is skipped
-      # entirely when they are not configured. The token is never printed and
-      # never appears in a URL that gets logged.
       - name: Report to Telegram
         if: always()
         continue-on-error: true
