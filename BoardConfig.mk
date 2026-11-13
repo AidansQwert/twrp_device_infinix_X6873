@@ -344,7 +344,12 @@ TW_EXCLUDE_APEX := true
 # auto-upgrade on probe, and flashing touch firmware from recovery can brick the
 # digitizer.
 
-TW_LOAD_VENDOR_MODULES := "focaltech_ft3683g.ko adaptive-ts.ko haptic_drv_hv.ko aw86224_light.ko"
+# Order matters: TWRP insmods this list front to back and does not retry.
+#   tran-led-core      <- aw86224_light
+#   adaptive-ts        <- focaltech_ft3683g   (and needs tnek / transsion_tranlog /
+#                         mtk_disp_notify, which first-stage init already loaded,
+#                         plus opsMediator, which is built into this kernel)
+TW_LOAD_VENDOR_MODULES := "tran-led-core.ko adaptive-ts.ko focaltech_ft3683g.ko aw86224_light.ko haptic_drv_hv.ko"
 TW_LOAD_VENDOR_BOOT_MODULES := true
 
 # Bumped so the artifact identifies the firmware it targets.
