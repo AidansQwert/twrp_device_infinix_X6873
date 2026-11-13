@@ -231,7 +231,11 @@ TW_NO_SCREEN_BLANK := true
 # node name "lcd-backlight" and contains both "max_brightness" and the literal
 # 2047, so the range is 0-2047. Every MediaTek reference tree checked uses the
 # same path.
+# Confirmed on the device: /sys/class/leds/lcd-backlight exists and
+# max_brightness reports 5119, so the slider must scale to that. TWRP assumes
+# 255 by default, which would clamp the panel to the bottom 5% of its range.
 TW_BRIGHTNESS_PATH := "/sys/class/leds/lcd-backlight/brightness"
+TW_MAX_BRIGHTNESS := 5119
 TW_MAX_BRIGHTNESS := 2047
 TW_DEFAULT_BRIGHTNESS := 1200
 
