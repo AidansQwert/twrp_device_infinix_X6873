@@ -230,6 +230,32 @@ jobs:
           ls -l "$DEST/bin/hw"
           ls -l "$DEST/lib64" | grep -iE 'keymint|gatekeeper|keymaster|McClient|tee' || true
 
+      # libtar (bootable/recovery/libtar/Android.mk) lists
+      # android.security.apc-ndk_platform among its shared libraries whenever
+      # TW_INCLUDE_CRYPTO_FBE is true, but nothing in the twrp-14.1 manifest
+      # defines that module any more:
+      #   FAILED: ninja: .../android.security.apc-ndk_platform.so.toc, needed by
+      #   .../libtar.so, missing and no known rule to make it
+      # libtar's own sources never reference APC (no apc/confirmation symbol in
+      # any .c), so the entry is stale. Drop it only when the module really is
+      # undefined, so this stays a no-op on manifests that still ship it.
+      - name: Patch stale libtar dependency (android.security.apc)
+        run: |
+          set -euo pipefail
+          cd /mnt/twrp
+          LIBTAR=bootable/recovery/libtar/Android.mk
+          if [ ! -f "$LIBTAR" ]; then
+            echo "$LIBTAR not present; nothing to patch"
+            exit 0
+          fi
+          if grep -rqs 'android.security.apc' --include='*.bp' --include='*.mk' hardware system frameworks vendor 2>/dev/null; then
+            echo "android.security.apc is defined in this manifest; leaving libtar alone"
+          else
+            sed -i '/android\.security\.apc-ndk_platform/d' "$LIBTAR"
+            echo "Removed the undefined android.security.apc-ndk_platform from $LIBTAR"
+            grep -n 'android.security' "$LIBTAR" | head -5 || true
+          fi
+
       - name: Fetch and validate stock vendor_boot
         run: |
           set -euo pipefail
