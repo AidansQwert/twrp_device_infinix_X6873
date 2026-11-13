@@ -248,10 +248,17 @@ jobs:
             echo "$LIBTAR not present; nothing to patch"
             exit 0
           fi
-          if grep -rqs 'android.security.apc' --include='*.bp' --include='*.mk' hardware system frameworks vendor 2>/dev/null; then
+          # Only a module *definition* counts (name: "android.security.apc" in a
+          # Soong file). Meh references to the module name exist all over the
+          # tree and must not prevent the patch.
+          if grep -rqsE 'name: *"android\.security\.apc' --include='*.bp' hardware system frameworks vendor 2>/dev/null; then
             echo "android.security.apc is defined in this manifest; leaving libtar alone"
           else
             sed -i '/android\.security\.apc-ndk_platform/d' "$LIBTAR"
+            if grep -q 'android\.security\.apc-ndk_platform' "$LIBTAR"; then
+              echo "::error::failed to remove android.security.apc-ndk_platform from $LIBTAR"
+              exit 1
+            fi
             echo "Removed the undefined android.security.apc-ndk_platform from $LIBTAR"
             grep -n 'android.security' "$LIBTAR" | head -5 || true
           fi
