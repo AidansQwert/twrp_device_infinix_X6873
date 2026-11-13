@@ -56,7 +56,7 @@
 /mnt/vendor/nvdata    ext4  /dev/block/by-name/nvdata                  flags=display="Nvdata";backup=1
 /mnt/vendor/nvcfg     ext4  /dev/block/by-name/nvcfg                   flags=display="Nvcfg";backup=1
 /mnt/vendor/protect_f ext4  /dev/block/by-name/protect1                flags=display="Protect_f";backup=1
-/mnt/vendor/protect_s ext4  /dev/block/by-name/protect_s2              flags=display="Protect_s";backup=0
+/mnt/vendor/protect_s ext4  /dev/block/by-name/protect2                flags=display="Protect_s";backup=0
 
 # ------------------------------------------------------ modem / firmware
 # Backup-only. No flashimg: these are signed images and a wrong write bricks

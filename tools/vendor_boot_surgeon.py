@@ -486,4 +486,20 @@ def main(argv):
 
 
 if __name__ == '__main__':
-    sys.exit(main(sys.argv[1:]))
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except ValueError as e:
+        # Bad magic / wrong header version. Show the size and the first bytes so
+        # a downloaded error page is obvious instead of a bare traceback.
+        path = sys.argv[2] if len(sys.argv) > 2 else None
+        if path and os.path.isfile(path):
+            with open(path, 'rb') as f:
+                head = f.read(16)
+            print('input file  : %s (%d bytes)' % (path, os.path.getsize(path)),
+                  file=sys.stderr)
+            print('first bytes : %r' % head, file=sys.stderr)
+            if head[:5] in (b'<!doc', b'<html'):
+                print('The URL returned an HTML page, not an image. Use the raw '
+                      'file URL (raw.githubusercontent.com/...).', file=sys.stderr)
+        print('ERROR: %s' % e, file=sys.stderr)
+        sys.exit(1)

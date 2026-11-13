@@ -11,8 +11,8 @@ on:
         type: choice
         options: ['twrp-12.1', 'twrp-14.1']
       stock_vendor_boot_url:
-        description: 'URL of the STOCK vendor_boot.img to graft onto'
-        default: 'https://gitlab.com/api/v4/projects/85881373/repository/files/vendor_boot.img/raw?ref=X6873-16.2.0.150SP12%28OP003PF001AZ%29'
+        description: 'URL of the STOCK vendor_boot.img to graft onto (raw file; default is XOS 16.3.0.150)'
+        default: 'https://raw.githubusercontent.com/AidansQwert/Vendor/main/vendor_boot.img'
         type: string
       build_target:
         description: 'Make target'
@@ -168,36 +168,49 @@ jobs:
           echo "Staged vendor payload:"
           du -sh "$DEST"
 
-      # This kernel repository provides the stock vendor_boot modules.
-      - name: Sync prebuilt kernel and modules
+      # No modules are staged into the device tree any more.
+      #
+      # The graft keeps the stock PLATFORM fragment, and that fragment already
+      # ships the firmware's own module set plus modules.load and
+      # modules.load.recovery, all built against the exact running kernel:
+      #   XOS 16.2.0.145SP03: 241 .ko, vermagic 6.1.145-android14-11-gbd2a8237408e
+      #   XOS 16.3.0.150    : 244 .ko, vermagic 6.1.157-android14-11-g96f885be21ae
+      # Pulling modules from the lineage-24.0 kernel repository (6.1.145) is what
+      # broke 16.3: a 6.1.157 kernel refuses every one of them, so recovery loses
+      # display and input. Whatever image is grafted is therefore also the module
+      # source of truth.
+      - name: Fetch and validate stock vendor_boot
         run: |
-          git clone --depth=1 -b lineage-24.0 \
-            https://github.com/kaminarich/android_kernel_infinix_X6873.git \
-            /mnt/twrp/device/infinix/X6873-kernel
-          echo "modules: $(ls /mnt/twrp/device/infinix/X6873-kernel/modules/*.ko | wc -l)"
-          wc -l \
-            /mnt/twrp/device/infinix/X6873-kernel/modules/vendor_ramdisk.modules.load \
-            /mnt/twrp/device/infinix/X6873-kernel/modules/vendor_ramdisk.modules.load.recovery
+          set -euo pipefail
+          URL="${{ inputs.stock_vendor_boot_url }}"
+          URL="${URL#${URL%%[![:space:]]*}}"
+          URL="${URL%${URL##*[![:space:]]}}"
 
-      - name: Stage recovery-fragment modules (delta only)
-        run: |
-          KSRC=/mnt/twrp/device/infinix/X6873-kernel/modules
-          DEST=/mnt/twrp/device/infinix/X6873/recovery/root/lib/modules
-          mkdir -p "$DEST"
+          # A GitHub blob/tree URL (or a GitLab web page) returns HTML, which is
+          # exactly the 'not a vendor_boot image (bad magic)' failure from the
+          # earlier run. Rewrite the GitHub form to the raw file URL.
+          case "$URL" in
+            https://github.com/*/blob/*)
+              URL=$(printf '%s' "$URL" | sed -E \
+                's#^https://github\.com/([^/]+)/([^/]+)/blob/(.+)$#https://raw.githubusercontent.com/\1/\2/\3#')
+              ;;
+          esac
+          echo "Stock vendor_boot URL: $URL"
 
-          for m in focaltech_ft3683g adaptive-ts haptic_drv_hv aw86224_light; do
-            cp -v "$KSRC/$m.ko" "$DEST/"
-          done
+          curl -fsSL --retry 3 --retry-delay 5 -o "$HOME/stock_vendor_boot.img" "$URL"
+          size=$(stat -c%s "$HOME/stock_vendor_boot.img")
+          echo "Downloaded $size bytes"
 
-          cat "$KSRC/vendor_ramdisk.modules.load.recovery" \
-            | grep -vE '^(focaltech_ft3683g|adaptive-ts|haptic_drv_hv|aw86224_light)\.ko$' \
-            > /tmp/loadbase
-          printf 'adaptive-ts.ko\nfocaltech_ft3683g.ko\nhaptic_drv_hv.ko\naw86224_light.ko\n' \
-            >> /tmp/loadbase
-          cp /tmp/loadbase "$DEST/modules.load.recovery"
+          if [ "$size" -lt 1048576 ]; then
+            echo "::error::stock vendor_boot is only $size bytes; the URL returned an error page, not an image"
+            od -c -N 64 "$HOME/stock_vendor_boot.img" || true
+            exit 1
+          fi
 
-          echo "Modules staged: $(ls "$DEST"/*.ko | wc -l)"
-          echo "Recovery module entries: $(wc -l < "$DEST/modules.load.recovery")"
+          python3 "$GITHUB_WORKSPACE/device_tree/tools/vendor_boot_surgeon.py" \
+            info "$HOME/stock_vendor_boot.img" | tee "$HOME/stock_vendor_boot_info.log"
+
+          echo "STOCK_IMG=$HOME/stock_vendor_boot.img" >> "$GITHUB_ENV"
 
       - name: Diagnose device config
         run: |
@@ -306,19 +319,22 @@ jobs:
             exit 0
           fi
 
+          set -euo pipefail
+          STOCK="${STOCK_IMG:-$HOME/stock_vendor_boot.img}"
           echo "Using recovery ramdisk: $RAMDISK ($(stat -c%s "$RAMDISK") bytes)"
-          curl -fsSL --retry 3 -o "$HOME/stock_vendor_boot.img" \
-            "${{ inputs.stock_vendor_boot_url }}"
-          echo "Stock image: $(stat -c%s "$HOME/stock_vendor_boot.img") bytes"
-          sha256sum "$HOME/stock_vendor_boot.img"
+          echo "Using stock image: $STOCK ($(stat -c%s "$STOCK") bytes)"
+          sha256sum "$STOCK"
 
           python3 "$GITHUB_WORKSPACE/device_tree/tools/vendor_boot_surgeon.py" \
-            selftest "$HOME/stock_vendor_boot.img" | tee "$HOME/selftest.log"
+            selftest "$STOCK" | tee "$HOME/selftest.log"
 
           mkdir -p "$HOME/artifact"
           python3 "$GITHUB_WORKSPACE/device_tree/tools/vendor_boot_surgeon.py" \
-            graft "$HOME/stock_vendor_boot.img" "$RAMDISK" \
+            graft "$STOCK" "$RAMDISK" \
             "$HOME/artifact/vendor_boot-twrp-X6873.img" | tee "$HOME/graft.log"
+
+          python3 "$GITHUB_WORKSPACE/device_tree/tools/vendor_boot_surgeon.py" \
+            info "$OUT/vendor_boot.img" > "$HOME/built_vendor_boot_info.log" 2>/dev/null || true
 
           cp "$OUT/vendor_boot.img" \
             "$HOME/artifact/vendor_boot-RAW-DO-NOT-FLASH.img" 2>/dev/null || true
@@ -340,7 +356,8 @@ jobs:
           cp -v "$HOME"/artifact/* upload/ 2>/dev/null || true
 
           for f in build.log lunch.log graft.log selftest.log \
-                   config-debug.log built_vendor_boot_info.log; do
+                   config-debug.log built_vendor_boot_info.log \
+                   stock_vendor_boot_info.log; do
             cp -v "$HOME/$f" upload/logs/ 2>/dev/null || true
           done
 

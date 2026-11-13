@@ -3,6 +3,12 @@
 TWRP recovery for the **Infinix GT 30 Pro (X6873)**, MediaTek **MT6897**
 (Dimensity 8350 Ultimate). Built by GitHub Actions.
 
+Configured against **XOS 16.3.0.150** (kernel 6.1.157). The recipe is
+firmware-agnostic: the workflow grafts onto whatever stock `vendor_boot` you
+point it at, and the kernel modules come from that same image, so 16.2 builds
+keep working too. What changed for 16.3 is the kernel (6.1.145 → 6.1.157), the
+244-module set and the DTB.
+
 > This repository is a fork of [kaminarich/twrp_device_infinix_X6873](https://github.com/kaminarich/twrp_device_infinix_X6873). Credit and thanks to Kaminarich for the upstream device tree. This fork contains additional changes; see the commit history for details.
 
 **The flashable output is `vendor_boot.img`, not `recovery.img`.** This device
@@ -23,8 +29,8 @@ Stock `vendor_boot.img` contains **two** vendor ramdisk fragments:
 
 | Fragment | Type | Size | Purpose |
 |---|---|---|---|
-| 0 | `PLATFORM` | 29,216,972 | **normal Android boot** — all 241 vendor kernel modules, fstab, first-stage tools |
-| 1 | `RECOVERY` | 3,118,179 | recovery resources only |
+| 0 | `PLATFORM` | 29,204,428 | **normal Android boot** — all 244 vendor kernel modules, fstab, first-stage tools |
+| 1 | `RECOVERY` | 3,121,015 | recovery resources only |
 
 A TWRP/OrangeFox build emits a `vendor_boot.img` containing **only its own
 ramdisk**. Flashing that replaces the whole partition and deletes fragment 0.
@@ -96,12 +102,15 @@ indistinguishable from a failed boot.
 
 Touch needed a separate fix: the stock PLATFORM ramdisk has **no touch
 driver**, because at normal boot touch comes from `odm_dlkm` after `super` is
-mounted. Four modules are added to the RECOVERY fragment
-(`focaltech_ft3683g.ko`, `adaptive-ts.ko`, `haptic_drv_hv.ko`,
-`aw86224_light.ko`), all reporting vermagic
-`6.1.145-android14-11-gbd2a8237408e` — the same kernel build as the stock
-modules. Because the RECOVERY fragment is overlaid on PLATFORM at recovery
-boot, normal boot is unaffected.
+mounted. `focaltech_ft3683g.ko`, `adaptive-ts.ko`, `haptic_drv_hv.ko` and
+`aw86224_light.ko` therefore have to come from the firmware's own
+`odm_dlkm.img`, and only from the matching build: 16.2 ships vermagic
+`6.1.145-android14-11-gbd2a8237408e`, 16.3 runs
+`6.1.157-android14-11-g96f885be21ae`, and the kernel rejects a mismatch instead
+of loading the module. They are no longer shipped in this tree, so a 16.3 build
+boots with a dead digitiser until they are extracted from 16.3's `odm_dlkm` into
+`recovery/root/lib/modules` with a matching `modules.load.recovery` line. Adding
+them to the RECOVERY fragment cannot affect normal boot, which does not use it.
 
 ---
 
@@ -111,20 +120,24 @@ Measured from this device's own stock images, not inherited from another tree.
 
 | Item | Value |
 |---|---|
+| Firmware | XOS 16.3.0.150 (2026-09-03); 16.2.0.145SP03 verified the same way |
 | SoC | MT6897, DTB `model = MT6897` |
-| Kernel | 6.1.145-android14-11, GKI 2.0, KMI 11 (`mgk_64_k61`) |
+| Kernel | 6.1.157-android14-11-g96f885be21ae, GKI 2.0, KMI 11 (`mgk_64_k61`) |
 | boot.img | header v4, **kernel only**, `ramdisk_size = 0` |
 | init_boot.img | generic ramdisk |
-| vendor_boot.img | header v4, `header_size` 2128, 2 fragments, DTB 401220 B |
+| vendor_boot.img | header v4, `header_size` 2128, 2 fragments, DTB 401194 B |
 | cmdline | `bootopt=64S3,32N2,64N2` |
 | Recovery graphics | `BGRA_8888` |
 | Userdata | F2FS, FBE `aes-256-xts:aes-256-cts:v2` + metadata encryption |
 | Update | Virtual A/B with compression |
 
-The 145SP03 and 150SP12 firmware builds ship the **same kernel binary**
-(sha256 `185c25f8…c961`), the same 241-module set, identical `modules.load`
-(179) / `modules.load.recovery` (234) and an identical DTB. Firmware version
-skew is therefore not a cause of the earlier failures.
+16.3.0.150 moves the kernel from 6.1.145 to **6.1.157**
+(`-android14-11-g96f885be21ae`): 244 modules instead of 241, `modules.load`
+182 / `modules.load.recovery` 237, and a new DTB (401194 B instead of 401220 B).
+Header, cmdline, load addresses, `fstab.mt6897`, `fstab.emmc` and the recovery
+graphics format are byte-identical, and the graft recipe is unchanged. Only the
+module source had to move — from the 16.2 kernel repository to the stock image
+being grafted, because 6.1.145 modules do not load on a 6.1.157 kernel.
 
 ## Brick-safety choices in `recovery.fstab`
 
@@ -136,6 +149,12 @@ list, it cannot offer. `TW_EXCLUDE_LPTOOLS := true` for the same reason.
 ## Building
 
 Actions → **Build TWRP vendor_boot (X6873)** → Run workflow.
+
+The `stock_vendor_boot_url` input defaults to the XOS 16.3.0.150 image. Point it
+at the raw `vendor_boot.img` of the exact build installed on the phone (a GitHub
+`blob`/`tree` page URL is rewritten automatically, and the file's magic is
+checked before anything is grafted). That image is also the kernel-module
+source, so recovery always gets the modules belonging to the running kernel.
 
 Artifacts:
 
@@ -235,6 +254,8 @@ configuration" is not the same as "known to boot". First-boot risks that remain:
   (`partitionmanager.cpp:221`) which an AIDL KeyMint device does not publish.
   `docs/DECRYPTION.md` has the full diagnosis, what a working setup needs, and
   the TEE root-of-trust caveat that may block it on this SoC anyway.
+- Touch/haptics are **missing on 16.3** unless the four `odm_dlkm` modules of
+  the same firmware build are added to `recovery/root/lib/modules`.
 - TWRP 12.1 may not mount stock EROFS `system`/`vendor` for backups
 - `TW_BRIGHTNESS_PATH` is unconfirmed on this panel
 - the fingerprint input device has no `.idc`, so TWRP may log unknown input events

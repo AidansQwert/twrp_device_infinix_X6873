@@ -10,9 +10,12 @@ DEVICE_PATH := device/infinix/X6873
 # ============================================================================
 # BRICK-SAFETY NOTES — read before changing anything here
 #
-# Every value below was measured from the device's own stock images
-# (boot.img / init_boot.img / vendor_boot.img, X6873-OP 16.2.0.145SP03,
-# kernel identical in 150SP12). Earlier community X6873 recovery trees
+# Every value below was measured from the device's own stock images.
+# Re-verified against XOS 16.3.0.150 (vendor_boot of 2026-09-03, kernel
+# 6.1.157-android14-11-g96f885be21ae): header, load addresses, cmdline, fstab
+# and partition sizes are unchanged from 16.2.0.145SP03; only the DTB and the
+# kernel module set moved, and both are handled below.
+# Earlier community X6873 recovery trees
 # bootlooped because of the specific mistakes called out in the comments.
 # Do not "tidy" these values.
 # ============================================================================
@@ -92,7 +95,9 @@ BOARD_KERNEL_CMDLINE := bootopt=64S3,32N2,64N2
 # from BOARD_KERNEL_CMDLINE via INTERNAL_KERNEL_CMDLINE, so setting it would be
 # dead config. Not set.
 
-# DTB: the stock MT6897 DTB, byte-identical, taken from stock vendor_boot.
+# DTB: the stock MT6897 DTB of XOS 16.3.0.150 (401194 bytes, sha256
+# 4ff99438…a347), byte-identical, taken from that firmware's vendor_boot.
+# It differs from the 16.2 DTB (401220 bytes) — same board, updated nodes.
 # It carries the MediaTek DT wrapper header (magic 1eabb7d7) the bootloader
 # expects — do not strip it, and do not substitute a DTB from another device.
 # BOARD_INCLUDE_DTB_IN_BOOTIMG defines the $(PRODUCT_OUT)/dtb.img target, but
@@ -181,6 +186,9 @@ BOARD_EXCLUDE_KERNEL_FROM_RECOVERY_IMAGE := true
 BOARD_MOVE_GSI_AVB_KEYS_TO_VENDOR_BOOT :=
 
 TARGET_RECOVERY_FSTAB := $(DEVICE_PATH)/recovery/root/system/etc/recovery.fstab
+# recovery.fstab is unchanged for 16.3: the stock fstab.emmc^ (recovery variant)
+# in the 16.3 vendor_boot lists the same partitions and the same FBE scheme as
+# 16.2, including protect2 and the metadata-encrypted userdata.
 
 # Stock recovery graphics format. RGBX_8888 (used by every earlier X6873 tree)
 # gives swapped red/blue channels on this panel.
@@ -283,9 +291,18 @@ TW_EXCLUDE_LPTOOLS := true
 TW_EXCLUDE_APEX := true
 
 # ---------------------------------------------------------------- modules
-# The prebuilt kernel repository is synced to $(DEVICE_PATH)-kernel by the
-# workflow. It holds the 241 stock vendor_boot modules plus 4 taken from stock
-# odm_dlkm for touch and haptics in recovery.
+# No kernel modules are shipped in the RECOVERY fragment.
+#
+# The graft keeps the stock PLATFORM fragment, and that fragment already carries
+# the firmware's own module set — 244 .ko on XOS 16.3.0.150, all reporting
+# vermagic 6.1.157-android14-11-g96f885be21ae — together with its modules.load
+# (182) and modules.load.recovery (237). First-stage init loads them at recovery
+# boot, so TWRP gets exactly the modules that match the running kernel.
+#
+# Copying modules in again is what breaks a firmware bump: the 16.2 prebuilt set
+# is vermagic 6.1.145, and a 6.1.157 kernel refuses to load it
+# ("version magic … should be 6.1.157…"), which leaves recovery without display
+# or input modules.
 #
 # Run #6 failed partly because nothing populated the vendor ramdisk:
 #   error: cannot open directory 'out/target/product/X6873/vendor_ramdisk'
@@ -294,54 +311,33 @@ TW_EXCLUDE_APEX := true
 # populated explicitly or it ships empty -- which is exactly the defect in the
 # idabgsram, XTENSEI and naden X6873 trees. This wiring follows
 # transsion-graveyard's Tecno CM6 tree.
-KERNEL_PATH := $(DEVICE_PATH)-kernel
-
-# BOARD_VENDOR_RAMDISK_KERNEL_MODULES is deliberately NOT used.
-#
-# It installs modules into the PLATFORM ramdisk fragment -- which is exactly the
-# fragment the graft REPLACES with the device's own stock fragment. Modules put
-# there are therefore discarded, and the flashable image ends up with no touch
-# driver. Verified on the real artifact: the r10 image's RECOVERY fragment
-# contained 0 .ko files.
-#
-# It would also not fit: 28 MB of modules in PLATFORM plus 28 MB in RECOVERY
-# plus TWRP exceeds the 64 MiB partition.
-#
-# Instead the modules are staged into $(DEVICE_PATH)/recovery/root/lib/modules/
-# by the workflow. The recovery packaging rule copies that tree verbatim:
-#     cp -rf device/infinix/X6873/recovery/root out/target/product/X6873/recovery/
-# (observed in the build log), so they land in the RECOVERY fragment and survive
-# the graft. This is the same layout idabgsram's working X6873 tree uses, and
-# jvaswb's X6882 tree, both of which ship 245 and 213 modules that way.
+# BOARD_VENDOR_RAMDISK_KERNEL_MODULES and $(DEVICE_PATH)-kernel are deliberately
+# NOT used: whatever they install lands in the PLATFORM fragment, which the graft
+# replaces with the stock one, and 28 MB of modules next to a 28 MB stock
+# fragment plus TWRP would not fit in the 64 MiB partition anyway. The r10
+# artifact proved the first point: its RECOVERY fragment held 0 .ko files.
 
 # TWRP module loading.
 #
-# TW_LOAD_VENDOR_BOOT_MODULES is NESTED inside "ifneq ($(TW_LOAD_VENDOR_MODULES),)"
-# in bootable/recovery/Android.mk:323-334, so setting it alone compiles no
-# module loader into TWRP.
+# TW_LOAD_VENDOR_MODULES is left unset on purpose. TW_LOAD_VENDOR_BOOT_MODULES is
+# NESTED inside "ifneq ($(TW_LOAD_VENDOR_MODULES),)" in
+# bootable/recovery/Android.mk:323-334, so naming modules here would compile a
+# loader whose only job is to insmod files that are already loaded by
+# first-stage init from the stock PLATFORM fragment.
 #
-# CORRECTION to an earlier claim in this tree's history: that does NOT mean no
-# modules get loaded. First-stage init loads the vendor ramdisk modules from
-# /lib/modules according to modules.load / modules.load.recovery, which is the
-# primary mechanism and is independent of TWRP. Cross-checked against
-# jvaswb/twrp-device_infinix_X6882 and Novicio-2309/twrp-android_device_tecno_LG7n:
-# both ship their modules in recovery/root/lib/modules with a modules.load and
-# set no TW_LOAD_VENDOR_MODULES at all.
-#
-# TWRP's own loader is therefore supplementary. It is enabled here as belt and
-# braces for the four modules added from stock odm_dlkm, which are also present
-# in modules.load.recovery; a second insmod attempt just returns EEXIST.
+# Touch and haptics are the one remaining gap, and they are not in vendor_boot on
+# any X6873 firmware: focaltech_ft3683g.ko, adaptive-ts.ko, haptic_drv_hv.ko and
+# aw86224_light.ko live in odm_dlkm and are only mounted after super comes up.
+# Recovery therefore boots and works with a dead digitiser until they are taken
+# from the *matching* odm_dlkm.img (16.3.0.150). Do not reuse the 16.2 copies:
+# their vermagic is 6.1.145 and the 16.3 kernel rejects them.
 #
 # Touch firmware is deliberately NOT shipped. Our driver is the flash-resident
 # SPI variant (focaltech_ft3683g.ko, built from .../focaltech/ft3683g_spi/), and
-# its firmware requests exist only for FW upgrade and factory-test INI paths
-# (fts_get_fw_file_via_request_firmware, fts_test_get_ini_via_request_firmware).
-# X6882 ships odm/firmware blobs because its driver is
-# focaltech_noflash_common.ko, which must upload firmware on every boot. Placing
-# a firmware file where a flash-resident FTS driver can find it risks an
+# its firmware requests exist only for FW upgrade and factory-test INI paths.
+# Placing a firmware file where a flash-resident FTS driver can find it risks an
 # auto-upgrade on probe, and flashing touch firmware from recovery can brick the
 # digitizer.
-TW_LOAD_VENDOR_MODULES := "focaltech_ft3683g.ko adaptive-ts.ko haptic_drv_hv.ko aw86224_light.ko"
-TW_LOAD_VENDOR_BOOT_MODULES := true
 
-TW_DEVICE_VERSION := X6873-brick-safe-1
+# Bumped so the artifact identifies the firmware it targets.
+TW_DEVICE_VERSION := X6873-brick-safe-2-xos16.3
