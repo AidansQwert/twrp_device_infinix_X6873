@@ -303,10 +303,37 @@ jobs:
           export LC_ALL=C
           source build/envsetup.sh
 
-          lunch twrp_X6873-eng > "$HOME/lunch.log" 2>&1
+          # AOSP 14 (QPR2 onwards, so twrp-14.1) changed the legacy lunch
+          # parser: "twrp_X6873-eng" is now split as product=twrp_X6873,
+          # release=eng, variant='' and rejected with
+          #   Invalid lunch combo: twrp_X6873-eng
+          # while twrp-12.1 accepts it. Try each accepted form in order so one
+          # workflow builds both branches.
+          : > "$HOME/lunch.log"
+          if lunch twrp_X6873-eng >> "$HOME/lunch.log" 2>&1; then
+            echo "lunch: legacy <product>-<variant> form accepted"
+          else
+            echo "lunch: two-part form rejected, trying the new format"
+            if lunch twrp_X6873 >> "$HOME/lunch.log" 2>&1; then
+              echo "lunch: new format, default release"
+            else
+              # The failure above names the releases this tree knows about:
+              #   No release config found for TARGET_RELEASE: trunk_staging.
+              #   Available releases are: ap2a, ap3a.
+              rel=$(grep -oE 'Available releases are:.*' "$HOME/lunch.log" \
+                    | tail -1 | sed 's/.*are: //' | tr ',' '\n' \
+                    | head -1 | tr -d ' .')
+              echo "lunch: retrying with release '${rel:-<none>}'"
+              if [ -n "$rel" ]; then
+                lunch twrp_X6873 "$rel" eng >> "$HOME/lunch.log" 2>&1 || true
+              fi
+            fi
+          fi
           cat "$HOME/lunch.log"
 
           echo "TARGET_PRODUCT=${TARGET_PRODUCT:-<unset>}"
+          echo "TARGET_RELEASE=${TARGET_RELEASE:-<unset>}"
+          echo "TARGET_BUILD_VARIANT=${TARGET_BUILD_VARIANT:-<unset>}"
           echo "TARGET_DEVICE=${TARGET_DEVICE:-<unset>}"
           if [ "$TARGET_PRODUCT" != "twrp_X6873" ]; then
             echo "::error::lunch did not take effect (TARGET_PRODUCT='${TARGET_PRODUCT}'). Refusing to build."
