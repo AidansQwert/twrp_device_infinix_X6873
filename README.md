@@ -112,6 +112,22 @@ boots with a dead digitiser until they are extracted from 16.3's `odm_dlkm` into
 `recovery/root/lib/modules` with a matching `modules.load.recovery` line. Adding
 them to the RECOVERY fragment cannot affect normal boot, which does not use it.
 
+On a rooted phone they can be copied straight out of `odm_dlkm` — in Termux:
+
+```bash
+su
+for m in focaltech_ft3683g adaptive-ts haptic_drv_hv aw86224_light; do
+  cp /odm_dlkm/lib/modules/$m.ko /sdcard/Download/
+done
+grep -a -o 'vermagic=[^ ]*' /sdcard/Download/*.ko    # must print 6.1.157-…
+exit
+```
+
+Put the four files in `recovery/root/lib/modules/` before building. If
+`/odm_dlkm/lib/modules` does not exist on your build, dump the partition itself
+(`dd if=/dev/block/by-name/odm_dlkm of=/sdcard/Download/odm_dlkm.img`) and
+extract the same four `.ko` from it.
+
 ---
 
 ## Verified device facts

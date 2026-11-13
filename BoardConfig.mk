@@ -319,11 +319,16 @@ TW_EXCLUDE_APEX := true
 
 # TWRP module loading.
 #
-# TW_LOAD_VENDOR_MODULES is left unset on purpose. TW_LOAD_VENDOR_BOOT_MODULES is
-# NESTED inside "ifneq ($(TW_LOAD_VENDOR_MODULES),)" in
-# bootable/recovery/Android.mk:323-334, so naming modules here would compile a
-# loader whose only job is to insmod files that are already loaded by
-# first-stage init from the stock PLATFORM fragment.
+# TW_LOAD_VENDOR_BOOT_MODULES is NESTED inside "ifneq ($(TW_LOAD_VENDOR_MODULES),)"
+# in bootable/recovery/Android.mk:323-334, so the loader is only compiled when at
+# least one module is named here.
+#
+# Everything the running kernel needs at boot already comes from the stock
+# PLATFORM fragment, so the only names worth listing are the four odm_dlkm ones
+# below. TWRP insmods them itself once the ramdisk is up, because first-stage
+# init cannot see them (they are not in vendor_boot). The .ko files have to be
+# dropped into recovery/root/lib/modules/ from the matching firmware; if that
+# directory is empty the loader logs four failures and recovery still boots.
 #
 # Touch and haptics are the one remaining gap, and they are not in vendor_boot on
 # any X6873 firmware: focaltech_ft3683g.ko, adaptive-ts.ko, haptic_drv_hv.ko and
@@ -338,6 +343,9 @@ TW_EXCLUDE_APEX := true
 # Placing a firmware file where a flash-resident FTS driver can find it risks an
 # auto-upgrade on probe, and flashing touch firmware from recovery can brick the
 # digitizer.
+
+TW_LOAD_VENDOR_MODULES := "focaltech_ft3683g.ko adaptive-ts.ko haptic_drv_hv.ko aw86224_light.ko"
+TW_LOAD_VENDOR_BOOT_MODULES := true
 
 # Bumped so the artifact identifies the firmware it targets.
 TW_DEVICE_VERSION := X6873-brick-safe-2-xos16.3
