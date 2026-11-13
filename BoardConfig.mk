@@ -346,9 +346,15 @@ TW_EXCLUDE_APEX := true
 
 # Order matters: TWRP insmods this list front to back and does not retry.
 #   tran-led-core      <- aw86224_light
-#   adaptive-ts        <- focaltech_ft3683g   (and needs tnek / transsion_tranlog /
-#                         mtk_disp_notify, which first-stage init already loaded,
-#                         plus opsMediator, which is built into this kernel)
+#   adaptive-ts        <- focaltech_ft3683g
+#
+# adaptive-ts only needs tnek / transsion_tranlog / mtk_disp_notify, all of which
+# first-stage init already loads from the stock PLATFORM fragment. Its modinfo
+# also names opsMediator, but that is a stale modpost entry: on XOS 16.3.0.150
+# there is no opsMediator module, no /sys/module/opsMediator and no such symbol
+# in /proc/kallsyms, yet adaptive_ts loads fine on the stock system (refcount 1
+# from focaltech_ft3683g). insmod resolves symbols, not depends=, so nothing
+# else has to be shipped.
 TW_LOAD_VENDOR_MODULES := "tran-led-core.ko adaptive-ts.ko focaltech_ft3683g.ko aw86224_light.ko haptic_drv_hv.ko"
 TW_LOAD_VENDOR_BOOT_MODULES := true
 
