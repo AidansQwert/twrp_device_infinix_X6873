@@ -3,4 +3,3 @@
 out/
 *.log
 __pycache__/
-recovery/root/lib/modules/
