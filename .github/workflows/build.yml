@@ -260,23 +260,24 @@ jobs:
           # workflow builds both branches.
           : > "$HOME/lunch.log"
           if lunch twrp_X6873-eng >> "$HOME/lunch.log" 2>&1; then
-            echo "lunch: legacy <product>-<variant> form accepted"
+            echo "lunch: twrp-12.1 two-part form accepted"
           else
-            echo "lunch: two-part form rejected, trying the new format"
-            if lunch twrp_X6873 >> "$HOME/lunch.log" 2>&1; then
-              echo "lunch: new format, default release"
-            else
-              # The failure above names the releases this tree knows about:
-              #   No release config found for TARGET_RELEASE: trunk_staging.
-              #   Available releases are: ap2a, ap3a.
-              rel=$(grep -oE 'Available releases are:.*' "$HOME/lunch.log" \
-                    | tail -1 | sed 's/.*are: //' | tr ',' '\n' \
-                    | head -1 | tr -d ' .')
-              echo "lunch: retrying with release '${rel:-<none>}'"
-              if [ -n "$rel" ]; then
-                lunch twrp_X6873 "$rel" eng >> "$HOME/lunch.log" 2>&1 || true
+            # TWRP's android-14.1 envsetup.sh always splits on '-' and rejects
+            # anything that is not <product>-<release>-<variant>: both
+            # 'twrp_X6873-eng' and 'twrp_X6873' fail there. The release name is
+            # per-manifest (ap3a, ap4a, trunk_staging, ...), so ask the build
+            # system instead of hardcoding it: a dummy release makes
+            # check_product print the valid ones.
+            lunch twrp_X6873-probe-eng >> "$HOME/lunch.log" 2>&1 || true
+            rels=$(grep -oE 'Available releases are:.*' "$HOME/lunch.log" \
+                   | tail -1 | sed 's/.*are: //' | tr ',' ' ' | tr -s ' ')
+            echo "lunch: releases reported as '${rels:-<none>}'"
+            for rel in $rels trunk_staging ap4a ap3a ap2a ap1a; do
+              if lunch "twrp_X6873-$rel-eng" >> "$HOME/lunch.log" 2>&1; then
+                echo "lunch: accepted twrp_X6873-$rel-eng"
+                break
               fi
-            fi
+            done
           fi
           cat "$HOME/lunch.log"
 
