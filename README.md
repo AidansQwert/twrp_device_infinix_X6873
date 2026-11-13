@@ -3,6 +3,13 @@
 TWRP recovery for the **Infinix GT 30 Pro (X6873)**, MediaTek **MT6897**
 (Dimensity 8350 Ultimate). Built by GitHub Actions.
 
+Built against the **twrp-14.1** minimal manifest, because this phone's keystore is
+**KeyMint AIDL** (`android.hardware.security.keymint@3.0-service.trustonic`) and
+TWRP 12.1 only speaks HIDL keymaster — on 12.1 `/data` decryption can never work.
+
+The 12.1 branch still builds and boots for flashing/backup duty, but 14.1 is the
+default here.
+
 Configured against **XOS 16.3.0.150** (kernel 6.1.157). The recipe is
 firmware-agnostic: the workflow grafts onto whatever stock `vendor_boot` you
 point it at, and the kernel modules come from that same image, so 16.2 builds

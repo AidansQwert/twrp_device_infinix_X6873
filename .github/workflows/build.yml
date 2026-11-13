@@ -6,13 +6,17 @@ on:
   workflow_dispatch:
     inputs:
       manifest_branch:
-        description: 'TWRP minimal manifest branch'
-        default: 'twrp-12.1'
+        description: 'TWRP minimal manifest branch (twrp-14.1 is required for AIDL KeyMint / /data decryption)'
+        default: 'twrp-14.1'
         type: choice
-        options: ['twrp-12.1', 'twrp-14.1']
+        options: ['twrp-14.1', 'twrp-12.1']
       stock_vendor_boot_url:
         description: 'URL of the STOCK vendor_boot.img to graft onto (raw file; default is XOS 16.3.0.150)'
         default: 'https://raw.githubusercontent.com/AidansQwert/Vendor/main/vendor_boot.img'
+        type: string
+      tee_stack_url:
+        description: 'Optional .tgz of the phone''s own keymint/gatekeeper service + .so to overlay on the pinned payload (raw URL)'
+        default: ''
         type: string
       build_target:
         description: 'Make target'
@@ -179,6 +183,53 @@ jobs:
       # broke 16.3: a 6.1.157 kernel refuses every one of them, so recovery loses
       # display and input. Whatever image is grafted is therefore also the module
       # source of truth.
+      # The Yayaya payload is a complete TEE stack, but it was dumped from an
+      # earlier firmware. Overlaying the binaries and libs taken from the phone's
+      # own 16.3 odm/vendor directories keeps the HAL byte-identical to the
+      # system that wrote the key blobs. Optional: leave the input empty to use
+      # the pinned payload as-is.
+      - name: Overlay KeyMint/gatekeeper stack from the phone (optional)
+        if: inputs.tee_stack_url != ''
+        run: |
+          set -euo pipefail
+          DEST=/mnt/twrp/device/infinix/X6873/recovery/root/vendor
+          URL="${{ inputs.tee_stack_url }}"
+          case "$URL" in
+            https://github.com/*/blob/*)
+              URL=$(printf '%s' "$URL" | sed -E \
+                's#^https://github\.com/([^/]+)/([^/]+)/blob/(.+)$#https://raw.githubusercontent.com/\1/\2/\3#')
+              ;;
+          esac
+          curl -fsSL --retry 3 -o "$HOME/tee-stack.tgz" "$URL"
+          echo "stack: $(stat -c%s "$HOME/tee-stack.tgz") bytes"
+          mkdir -p "$HOME/tee-stack" "$DEST/bin/hw" "$DEST/lib64" "$DEST/etc/init"
+          tar xzf "$HOME/tee-stack.tgz" -C "$HOME/tee-stack"
+
+          # The tarball may be flat; file names decide the destination.
+          while IFS= read -r f; do
+            base=$(basename "$f")
+            case "$base" in
+              *.so)
+                install -m 0644 "$f" "$DEST/lib64/$base"
+                echo "lib64/$base"
+                ;;
+              *.rc)
+                install -m 0644 "$f" "$DEST/etc/init/$base"
+                echo "etc/init/$base"
+                ;;
+              android.hardware.security.keymint*|android.hardware.gatekeeper-service.trustonic|vendor.trustonic.tee@*)
+                install -m 0755 "$f" "$DEST/bin/hw/$base"
+                echo "bin/hw/$base"
+                ;;
+              *)
+                echo "::warning::ignoring $base (unrecognised)"
+                ;;
+            esac
+          done < <(find "$HOME/tee-stack" -type f -not -name '*.tgz')
+
+          ls -l "$DEST/bin/hw"
+          ls -l "$DEST/lib64" | grep -iE 'keymint|gatekeeper|keymaster|McClient|tee' || true
+
       - name: Fetch and validate stock vendor_boot
         run: |
           set -euo pipefail
